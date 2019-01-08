@@ -242,7 +242,7 @@ class DotaOptimizer:
     MAX_GRAD_NORM = 0.5
 
     def __init__(self, rmq_host, rmq_port, batch_size, learning_rate, checkpoint, pretrained_model,
-                 mq_prefetch_count, exp_dir, job_dir):
+                 mq_prefetch_count, exp_dir, job_dir, local):
         super().__init__()
         self.rmq_host = rmq_host
         self.rmq_port = rmq_port
@@ -251,6 +251,10 @@ class DotaOptimizer:
         self.checkpoint = checkpoint
         self.mq_prefetch_count = mq_prefetch_count
         self.episode = 0
+        self.running_mean = {TEAM_RADIANT: None, TEAM_DIRE: None}
+        self.running_std = {TEAM_RADIANT: None, TEAM_DIRE: None}
+        self.local = local
+
         self.policy_base = Policy()
         self.exp_dir = exp_dir
         self.job_dir = job_dir
@@ -267,8 +271,9 @@ class DotaOptimizer:
             # TODO(tzaman): Set logdir ourselves?
             self.writer = SummaryWriter(log_dir=self.log_dir)
             logger.info('Checkpointing to: {}'.format(self.log_dir))
-            client = storage.Client()
-            self.bucket = client.get_bucket(self.BUCKET_NAME)
+            if not self.local:
+                client = storage.Client()
+                self.bucket = client.get_bucket(self.BUCKET_NAME)
 
             # First, check if logdir exists.
             latest_model = self.get_latest_model(prefix=self.log_dir)
@@ -280,12 +285,13 @@ class DotaOptimizer:
                     logger.warning('Overriding pretrained model by latest model.')
                 pretrained_model = latest_model
 
-            if pretrained_model is not None:
-                logger.info('Downloading: {}'.format(pretrained_model))
-                model_blob = self.bucket.get_blob(pretrained_model)
-                # TODO(tzaman): Download to BytesIO and supply to torch in that way.
-                pretrained_model = '/tmp/model.pt'
-                model_blob.download_to_filename(pretrained_model)
+            if not self.local:
+                if pretrained_model is not None:
+                    logger.info('Downloading: {}'.format(pretrained_model))
+                    model_blob = self.bucket.get_blob(pretrained_model)
+                    # TODO(tzaman): Download to BytesIO and supply to torch in that way.
+                    pretrained_model = '/tmp/model.pt'
+                    model_blob.download_to_filename(pretrained_model)
 
         if pretrained_model is not None:
             self.policy_base.load_state_dict(torch.load(pretrained_model), strict=False)
@@ -513,8 +519,9 @@ class DotaOptimizer:
 
             # Upload events to GCS
             self.writer.file_writer.flush()  # Flush before uploading
-            blob = self.bucket.blob(self.events_filename)
-            blob.upload_from_filename(filename=self.events_filename)
+            if not self.local:
+                blob = self.bucket.blob(self.events_filename)
+                blob.upload_from_filename(filename=self.events_filename)
 
             self.upload_model(version=it)
 
@@ -541,8 +548,9 @@ class DotaOptimizer:
         self.mq.publish_model(msg=state_dict_b, hdr={'version': version})
 
         # Upload to GCP.
-        blob = self.bucket.blob(rel_path)
-        blob.upload_from_string(data=state_dict_b)  # Model
+        if not self.local:
+            blob = self.bucket.blob(rel_path)
+            blob.upload_from_string(data=state_dict_b)  # Model
 
 
 def init_distribution(backend='gloo'):
@@ -555,7 +563,7 @@ def init_distribution(backend='gloo'):
 
 
 def main(rmq_host, rmq_port, batch_size, learning_rate, pretrained_model, mq_prefetch_count,
-         exp_dir, job_dir):
+         exp_dir, job_dir, local):
     logger.info('main(rmq_host={}, rmq_port={}, batch_size={} exp_dir={}, job_dir={})'.format(
         rmq_host, rmq_port, batch_size, exp_dir, job_dir))
  
@@ -578,6 +586,7 @@ def main(rmq_host, rmq_port, batch_size, learning_rate, pretrained_model, mq_pre
         mq_prefetch_count=mq_prefetch_count,
         exp_dir=exp_dir,
         job_dir=job_dir,
+        local=local,
     )
 
     # Upload initial model.
@@ -601,6 +610,7 @@ if __name__ == '__main__':
     parser.add_argument("--pretrained-model", type=str, help="pretrained model file within gcs bucket", default=None)
     parser.add_argument("--mq-prefetch-count", type=int,
                         help="amount of experience messages to prefetch from mq", default=2)
+    parser.add_argument("--local", type=bool, help="run locally or using Google Cloud Storage (default)", default=False)
     args = parser.parse_args()
 
     try:
@@ -613,6 +623,7 @@ if __name__ == '__main__':
             mq_prefetch_count=args.mq_prefetch_count,
             exp_dir=args.exp_dir,
             job_dir=args.job_dir,
+            local=args.local,
         )
     except KeyboardInterrupt:
         pass
