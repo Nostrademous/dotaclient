@@ -33,6 +33,8 @@ import pika # TODO(tzaman): remove in favour of aioamqp
 
 from policy import Policy
 
+from dotaworld.world_state import WorldData
+
 
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s')
 logger = logging.getLogger(__name__)
@@ -528,6 +530,12 @@ class Game:
             TEAM_RADIANT: response.world_state_radiant,
             TEAM_DIRE: response.world_state_dire,
         }
+
+        world_data = {
+            TEAM_RADIANT: None,
+            TEAM_DIRE: None,
+        }
+
         done = False
         step = 0
         dota_time = -float('Inf')
@@ -544,6 +552,11 @@ class Game:
                     break
                 obs = response.world_state
                 dota_time = obs.dota_time
+
+                if world_data[team_id] is None:
+                    world_data[team_id] = WorldData(obs)
+                else:
+                    world_data[team_id].update_world_data(obs)
 
                 player.compute_reward(prev_obs=prev_obs[team_id], obs=obs)
 
