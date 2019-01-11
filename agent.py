@@ -406,8 +406,7 @@ class Player:
             hero_unit=hero_unit,
             unit_types=[
                 CMsgBotWorldState.UnitType.Value('LANE_CREEP'),
-                CMsgBotWorldState.UnitType.Value('CREEP_HERO'),
-                CMsgBotWorldState.UnitType.Value('HERO')
+                CMsgBotWorldState.UnitType.Value('CREEP_HERO')
             ],
             team_id=OPPOSITE_TEAM[hero_unit.team_id],
         )
