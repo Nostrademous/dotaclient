@@ -97,7 +97,7 @@ def get_total_xp(level, xp_needed_to_level):
     missing_xp_for_next_level = (xp_required_for_next_level - xp_needed_to_level)
     return xp_to_reach_level[level] + missing_xp_for_next_level
 
-
+'''
 def get_reward(prev_obs, obs, player_id):
     """Get the reward."""
     unit_init = get_unit(prev_obs, player_id=player_id)
@@ -142,6 +142,53 @@ def get_reward(prev_obs, obs, player_id):
     # Microreward for distance to help nudge to mid initially.
     dist_mid = math.sqrt(unit.location.x**2 + unit.location.y**2)
     reward['dist'] = -(dist_mid / 8000.) * 0.001
+
+    return reward
+'''
+
+def get_reward_2(data, player_id):
+    """Get the reward."""
+    player = data.get_player_by_id(player_id)
+
+    reward = {}
+
+    #level_diff  = player.udata.level - player.prev_udata.level
+
+    prev_total_xp = get_total_xp(player.prev_udata.level, player.prev_udata.xp_needed_to_level)
+    curr_total_xp = get_total_xp(player.udata.level, player.udata.xp_needed_to_level)
+    xp_diff = curr_total_xp - prev_total_xp
+    reward['xp'] = (xp_diff) * 0.002 # One creep is around 40xp
+
+    kill_diff   = player.pdata.kills - player.prev_pdata.kills
+    reward['kills'] = kill_diff * 1.0
+
+    death_diff  = player.pdata.deaths - player.prev_pdata.deaths
+    reward['death'] = death_diff * -1.0
+
+    assist_diff = player.pdata.assists - player.prev_pdata.assists
+    reward['assist'] = assist_diff * 0.5
+
+    if player.prev_udata.is_alive and player.udata.is_alive:
+        curr_health_ratio = (player.udata.health - (player.health_regen * player.avg_prtt)) / player.udata.health_max
+        prev_health_ratio = player.prev_udata.health / player.prev_udata.health_max
+        low_hp_factor = 1. + (1 - curr_health_ratio)**2
+        reward['hp'] = (curr_health_ratio - prev_health_ratio) * low_hp_factor
+
+        curr_mana_ratio = (player.udata.mana - (player.mana_regen * player.avg_prtt)) / player.udata.mana_max
+        prev_mana_ratio = player.prev_udata.mana / player.prev_udata.mana_max
+        low_mana_factor = 1. + (1 - curr_manah_ratio)**2
+        reward['mana'] = (curr_manah_ratio - prev_mana_ratio) * low_mana_factor
+
+    # players start with 600 gold, 1 TP (50gold) and gain 1 gold per 0.66 seconds at 0:00 game clock (91 gold / minute)
+    gold_diff = 0.
+    # calculate gold value for the game after 0:00 timestamp
+    if data.game_state == 5:
+        gold_diff = player.udata.net_worth - player.prev_udata.net_worth - 650. - (91. / 60.) * player.avg_prtt
+    # calculate gold value for first 90 seconds of game prior to inital spawn and per second gold gain
+    elif data.game_state == 4:
+        gold_diff = player.udata.net_worth - player.prev_udata.net_worth - 650.
+    # TODO (nostrademous) do we care in reliable vs. unreliable gold?
+    reward['gold'] = gold_diff
 
     return reward
 
@@ -476,8 +523,14 @@ class Player:
         action_pb.player = self.player_id
         return action_pb
 
+    '''
     def compute_reward(self, prev_obs, obs):
         reward = get_reward(prev_obs=prev_obs, obs=obs, player_id=self.player_id)
+        self.rewards.append(reward)
+    '''
+
+    def compute_reward_2(self, data):
+        reward = get_reward_2(data, player_id=self.player_id)
         self.rewards.append(reward)
 
 
@@ -525,10 +578,10 @@ class Game:
 
         response = await asyncio.wait_for(self.dota_service.reset(self.config), timeout=120)
 
-        prev_obs = {
-            TEAM_RADIANT: response.world_state_radiant,
-            TEAM_DIRE: response.world_state_dire,
-        }
+        #prev_obs = {
+        #    TEAM_RADIANT: response.world_state_radiant,
+        #    TEAM_DIRE: response.world_state_dire,
+        #}
 
         world_data = {
             TEAM_RADIANT: None,
@@ -552,12 +605,13 @@ class Game:
                 obs = response.world_state
                 dota_time = obs.dota_time
 
-                if world_data[team_id] is None:
-                    world_data[team_id] = WorldData(obs)
-                else:
+                if world_data[team_id]:
                     world_data[team_id].update_world_data(obs)
+                else:
+                    world_data[team_id] = WorldData(obs)
 
-                player.compute_reward(prev_obs=prev_obs[team_id], obs=obs)
+                #player.compute_reward(prev_obs=prev_obs[team_id], obs=obs)
+                player.compute_reward_2(world_data[team_id])
 
                 action_pb = player.obs_to_action(obs=obs)
                 actions_pb = CMsgBotWorldState.Actions(actions=[action_pb])
@@ -565,7 +619,7 @@ class Game:
 
                 _ = await self.dota_service.act(Actions(actions=actions_pb, team_id=team_id))
 
-                prev_obs[team_id] = obs
+                #prev_obs[team_id] = obs
 
             # Subtract eachothers rewards
             # if step > 0:
