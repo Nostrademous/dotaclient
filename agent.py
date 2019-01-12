@@ -154,8 +154,8 @@ def get_reward_2(data, player_id):
 
     #level_diff  = player.udata.level - player.prev_udata.level
 
-    prev_total_xp = get_total_xp(player.prev_udata.level, player.prev_udata.xp_needed_to_level)
-    curr_total_xp = get_total_xp(player.udata.level, player.udata.xp_needed_to_level)
+    prev_total_xp = get_total_xp(player.prev_udata.get_level(), player.prev_udata.get_xp_needed_to_level())
+    curr_total_xp = get_total_xp(player.udata.get_level(), player.udata.get_xp_needed_to_level())
     xp_diff = curr_total_xp - prev_total_xp
     reward['xp'] = (xp_diff) * 0.002 # One creep is around 40xp
 
@@ -168,27 +168,39 @@ def get_reward_2(data, player_id):
     assist_diff = player.pdata.assists - player.prev_pdata.assists
     reward['assist'] = assist_diff * 0.5
 
-    if player.prev_udata.is_alive and player.udata.is_alive:
-        curr_health_ratio = (player.udata.health - (player.health_regen * player.avg_prtt)) / player.udata.health_max
-        prev_health_ratio = player.prev_udata.health / player.prev_udata.health_max
+    t_delta = player.get_time_since_last_seen()
+
+    if player.prev_udata.is_alive() and player.udata.is_alive():
+        if player.udata.get_health() != player.udata.get_max_health():
+            curr_health_ratio = (player.udata.get_health() - (player.udata.get_health_regen() * t_delta)) / player.udata.get_max_health()
+        else:
+            curr_health_ratio = 1.0
+        prev_health_ratio = player.prev_udata.get_health() / player.prev_udata.get_max_health()
         low_hp_factor = 1. + (1 - curr_health_ratio)**2
         reward['hp'] = (curr_health_ratio - prev_health_ratio) * low_hp_factor
 
-        curr_mana_ratio = (player.udata.mana - (player.mana_regen * player.avg_prtt)) / player.udata.mana_max
-        prev_mana_ratio = player.prev_udata.mana / player.prev_udata.mana_max
-        low_mana_factor = 1. + (1 - curr_manah_ratio)**2
-        reward['mana'] = (curr_manah_ratio - prev_mana_ratio) * low_mana_factor
+        if player.udata.get_mana() != player.udata.get_max_mana():
+            curr_mana_ratio = (player.udata.get_mana() - (player.udata.get_mana_regen() * t_delta)) / player.udata.get_max_mana()
+        else:
+            curr_mana_ratio = 1.0
+        prev_mana_ratio = player.prev_udata.get_mana() / player.prev_udata.get_max_mana()
+        low_mana_factor = 1. + (1 - curr_mana_ratio)**2
+        reward['mana'] = (curr_mana_ratio - prev_mana_ratio) * low_mana_factor
 
     # players start with 600 gold, 1 TP (50gold) and gain 1 gold per 0.66 seconds at 0:00 game clock (91 gold / minute)
     gold_diff = 0.
     # calculate gold value for the game after 0:00 timestamp
     if data.game_state == 5:
-        gold_diff = player.udata.net_worth - player.prev_udata.net_worth - 650. - (91. / 60.) * player.avg_prtt
+        gold_diff = player.udata.get_net_worth() - player.prev_udata.get_net_worth() - (91.0 / 60.0) * t_delta
     # calculate gold value for first 90 seconds of game prior to inital spawn and per second gold gain
     elif data.game_state == 4:
-        gold_diff = player.udata.net_worth - player.prev_udata.net_worth - 650.
+        gold_diff = player.udata.get_net_worth() - player.prev_udata.get_net_worth()
     # TODO (nostrademous) do we care in reliable vs. unreliable gold?
     reward['gold'] = gold_diff
+    
+    # Microreward for distance to help nudge to mid initially.
+    dist_mid = player.get_location().len()
+    reward['dist'] = -(dist_mid / 8000.) * 0.001
 
     return reward
 
@@ -584,8 +596,8 @@ class Game:
         #}
 
         world_data = {
-            TEAM_RADIANT: None,
-            TEAM_DIRE: None,
+            TEAM_RADIANT: WorldData(response.world_state_radiant),
+            TEAM_DIRE: WorldData(response.world_state_dire),
         }
 
         done = False
@@ -605,10 +617,7 @@ class Game:
                 obs = response.world_state
                 dota_time = obs.dota_time
 
-                if world_data[team_id]:
-                    world_data[team_id].update_world_data(obs)
-                else:
-                    world_data[team_id] = WorldData(obs)
+                world_data[team_id].update_world_data(obs)
 
                 #player.compute_reward(prev_obs=prev_obs[team_id], obs=obs)
                 player.compute_reward_2(world_data[team_id])
