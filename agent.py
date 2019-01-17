@@ -33,7 +33,7 @@ import pika # TODO(tzaman): remove in favour of aioamqp
 
 from policy import Policy
 
-from dotaworld.world_state import WorldData
+from dotaworld.world_state import WorldData, get_ability_name_from_id
 
 
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s')
@@ -264,7 +264,8 @@ class Player:
     def pack_policy_inputs(inputs):
         """Convert the list-of-dicts into a dict with a single tensor per input for the sequence."""
 
-        d = {'env':[], 'ability_leveling':[], 'allied_heroes':[], 'enemy_heroes':[], 'allied_nonheroes':[], 'enemy_nonheroes':[]}
+        d = {'env':[], 'ability_leveling':[], 'allied_heroes':[], 'enemy_heroes':[], 'allied_nonheroes':[], 'enemy_nonheroes':[],
+             'allied_towers':[], 'enemy_towers':[]}
         for inp in inputs:  # go over steps: (list of dicts)
             for k, v in inp.items(): # go over each input in the step (dict)
                 d[k].append(v)
@@ -363,10 +364,11 @@ class Player:
         env_state = torch.Tensor([dota_time_norm, creepwave_sin, team_float])
 
         # Process player ability leveling
-        ids = data.get_player_ability_ids(player_id=self.player_id, bCanBeLeveled=True)
-        #print(player.get_name(),  'abilities that can be leveled', ids)
-        ab_state = torch.zeros(1, Policy.MAX_LEVEL_ABILITY_SELECTIONS)
-        #TODO: FIXME
+        intAbilities = data.get_player_ability_ids(player_id=self.player_id, bCanBeLeveled=True)
+        # print(player.get_name(),  'abilities that can be leveled', intAbilities)
+        ab_state = torch.zeros([1, Policy.MAX_LEVEL_ABILITY_SELECTIONS], dtype=torch.int)
+        for index, value in enumerate(intAbilities):
+            ab_state[0, index] = value
 
         # Process units
         allied_heroes, allied_hero_handles = self.unit_matrix(
@@ -390,7 +392,19 @@ class Player:
             hero_unit=player.udata,
         )
 
-        unit_handles = torch.cat([allied_hero_handles, enemy_hero_handles, allied_nonhero_handles, enemy_nonhero_handles])
+        allied_towers, allied_tower_handles = self.unit_matrix(
+            unit_list=data.good_towers,
+            hero_unit=player.udata,
+        )
+
+        enemy_towers, enemy_tower_handles = self.unit_matrix(
+            unit_list=data.bad_towers,
+            hero_unit=player.udata,
+        )
+
+        unit_handles = torch.cat([allied_hero_handles, enemy_hero_handles,
+                                  allied_nonhero_handles, enemy_nonhero_handles,
+                                  allied_tower_handles, enemy_tower_handles])
 
         policy_input = dict(
             env=env_state,
@@ -399,6 +413,8 @@ class Player:
             enemy_heroes=enemy_heroes,
             allied_nonheroes=allied_nonheroes,
             enemy_nonheroes=enemy_nonheroes,
+            allied_towers=allied_towers,
+            enemy_towers=enemy_towers,
         )
 
         head_prob_dict, hidden = self.policy.single(**policy_input, hidden=hidden)
@@ -409,11 +425,16 @@ class Player:
 
         return action_dict, policy_input, unit_handles, hidden
 
-    def action_to_pb(self, action_dict, data, unit_handles):
+    def actions_to_pb(self, action_dict, data, unit_handles):
         # TODO(tzaman): Recrease the scope of this function. Make it a converter only.
         player = data.get_player_by_id(self.player_id)
 
+        actions_pb = CMsgBotWorldState.Actions()
+        actions_pb.dota_time = data.dota_time
+
         action_pb = CMsgBotWorldState.Action()
+        # TODO - changed to Actions for multiple actions in one file
+
         # action_pb.actionDelay = action_dict['delay'] * DELAY_ENUM_TO_STEP
         action_enum = action_dict['enum']
         if action_enum == 0:
@@ -439,9 +460,23 @@ class Player:
             action_pb.attackTarget.CopyFrom(m)
         else:
             raise ValueError("unknown action {}".format(action_enum))
-        return action_pb
+        action_pb.player = self.player_id
+        actions_pb.actions.extend([action_pb])
 
-    def obs_to_action(self, data):
+        # add ability level up selection if not 0
+        if int(action_dict['ab_level']) != 0:
+            action_level_ability_pb = CMsgBotWorldState.Action()
+            action_level_ability_pb.actionType = CMsgBotWorldState.Action.Type.Value(
+                    'DOTA_UNIT_ORDER_TRAIN_ABILITY')
+            m = CMsgBotWorldState.Action.TrainAbility()
+            m.ability = get_ability_name_from_id(action_dict['ab_level'])
+            action_level_ability_pb.trainAbility.CopyFrom(m)
+            action_level_ability_pb.player = self.player_id
+            actions_pb.actions.extend([action_level_ability_pb])
+
+        return actions_pb
+
+    def obs_to_actions(self, data):
         action_dict, policy_input, unit_handles, self.hidden = self.select_action(
             data=data,
             hidden=self.hidden,
@@ -452,9 +487,8 @@ class Player:
 
         logger.debug('action:\n' + pformat(action_dict))
 
-        action_pb = self.action_to_pb(action_dict=action_dict, data=data, unit_handles=unit_handles)
-        action_pb.player = self.player_id
-        return action_pb
+        actions_pb = self.actions_to_pb(action_dict=action_dict, data=data, unit_handles=unit_handles)
+        return actions_pb
 
     def compute_reward(self, data):
         reward = get_reward(data, player_id=self.player_id)
@@ -531,9 +565,7 @@ class Game:
 
                 player.compute_reward(world_data[team_id])
 
-                action_pb = player.obs_to_action(data=world_data[team_id])
-                actions_pb = CMsgBotWorldState.Actions(actions=[action_pb])
-                actions_pb.dota_time = obs.dota_time
+                actions_pb = player.obs_to_actions(data=world_data[team_id])
 
                 _ = await self.dota_service.act(Actions(actions=actions_pb, team_id=team_id))
 

@@ -23,6 +23,26 @@ hero_data = None
 unit_data = None
 
 
+ability_name_to_id_cache = dict()
+def get_ability_id_from_name(strName):
+    global ability_name_to_id_cache
+    if not ability_data:
+        return None
+    if strName in ability_name_to_id_cache:
+        return ability_name_to_id_cache[strName]
+    for key in ability_data:
+        if ability_data[key]['Name'] == strName:
+            ability_name_to_id_cache[strName] = int(key)
+            return int(key)
+
+def get_ability_name_from_id(intValue):
+    if not ability_data:
+        return ""
+    ability = ability_data.get(str(intValue), None)
+    if ability:
+        return ability['Name']
+    return ""
+
 class HeroSelectionData(object):
     """Handle initial data durning hero selection."""
 
@@ -255,7 +275,9 @@ class PlayerData(object):
         if 'Talents' in hero_data[str(self.hero_id)].keys():
             talents = hero_data[str(self.hero_id)]['Talents']
             tier = (tier-1)*2+1
-            return talents['Talent_'+str(tier)], talents['Talent_'+str(tier+1)]
+            choice_1_id = get_ability_id_from_name(talents['Talent_'+str(tier)])
+            choice_2_id = get_ability_id_from_name(talents['Talent_'+str(tier+1)])
+            return choice_1_id, choice_2_id
         else:
             return None, None
 
@@ -584,7 +606,7 @@ class WorldData(object):
         a_ids = []
         for ability in abilities:
             id = ability.ability_id
-            a_ids.append(ability.get_name())
+            a_ids.append(id)
 
             # generic_hidden
             if id == 6251:
@@ -623,7 +645,7 @@ class WorldData(object):
                         continue
 
             # if we get here it can be leveled or we didn't care
-            ids.append(ability.get_name())
+            ids.append(ability.ability_id)
 
         t1_talent_picked = False
         if p_level >= 10:

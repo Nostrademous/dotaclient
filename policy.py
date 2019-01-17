@@ -33,22 +33,24 @@ class Policy(nn.Module):
     def __init__(self):
         super().__init__()
 
+        # Environment Related
         self.affine_env = nn.Linear(3, 128)
 
-        self.affine_player_ability_selection = nn.Linear(self.MAX_LEVEL_ABILITY_SELECTIONS, 128)
-        self.affine_unit_basic_stats = nn.Linear(8, 128)
+        # Unit related
+        self.affine_unit_basic_stats    = nn.Linear(8, 128)
+        self.affine_unit_ah             = nn.Linear(128, 128) # allied heroes
+        self.affine_unit_eh             = nn.Linear(128, 128) # enemy heroes
+        self.affine_unit_anh            = nn.Linear(128, 128) # allied creep & non-hero units
+        self.affine_unit_enh            = nn.Linear(128, 128) # enemy creep & non-hero units
+        self.affine_unit_at             = nn.Linear(128, 128) # allied towers
+        self.affine_unit_et             = nn.Linear(128, 128) # enemy towers
 
-        self.affine_unit_ah = nn.Linear(128, 128)
-        self.affine_unit_eh = nn.Linear(128, 128)
-        self.affine_unit_anh = nn.Linear(128, 128)
-        self.affine_unit_enh = nn.Linear(128, 128)
-
-        self.affine_pre_rnn = nn.Linear(640, 128)
+        self.affine_pre_rnn = nn.Linear(896, 128) # 896 = 7 * 128 (7 unit related affines)
         self.rnn = nn.LSTM(input_size=128, hidden_size=128, num_layers=1)
 
         # self.ln = nn.LayerNorm(128)
 
-        # Heads
+        # Heads - Action related
         self.affine_head_enum = nn.Linear(128, 3)
         self.affine_move_x = nn.Linear(128, self.N_MOVE_ENUMS)
         self.affine_move_y = nn.Linear(128, self.N_MOVE_ENUMS)
@@ -62,7 +64,8 @@ class Policy(nn.Module):
         return self.__call__(**kwargs, hidden=hidden)
 
     def forward(self, env, ability_leveling, allied_heroes, enemy_heroes,
-                allied_nonheroes, enemy_nonheroes, hidden):
+                allied_nonheroes, enemy_nonheroes, allied_towers, enemy_towers,
+                hidden):
         logger.debug('policy(inputs=\n{}'.format(
             pformat({'env': env,
             'ability_leveling': ability_leveling,
@@ -70,13 +73,12 @@ class Policy(nn.Module):
             'enemy_heroes': enemy_heroes,
             'allied_nonheroes': allied_nonheroes,
             'enemy_nonheroes': enemy_nonheroes,
+            'allied_towers': allied_towers,
+            'enemy_towers': enemy_towers,
             })))
 
         # Environment.
         env = F.relu(self.affine_env(env))  # (128,)
-
-        # Ability Leveling
-        ab_lvl_basic = F.relu(self.affine_player_ability_selection(ability_leveling)) # (128,)
 
         # Allied Heroes.
         ah_basic = F.relu(self.affine_unit_basic_stats(allied_heroes))
@@ -98,13 +100,25 @@ class Policy(nn.Module):
         enh_embedding = self.affine_unit_enh(enh_basic)
         enh_embedding_max, _ = torch.max(enh_embedding, dim=1) # (128,)
 
+        # Allied Towers.
+        at_basic = F.relu(self.affine_unit_basic_stats(allied_towers))
+        at_embedding = self.affine_unit_at(at_basic)
+        at_embedding_max, _ = torch.max(at_embedding, dim=1) # (128,)
+
+        # Enemy Towers.
+        et_basic = F.relu(self.affine_unit_basic_stats(enemy_towers))
+        et_embedding = self.affine_unit_et(et_basic)
+        et_embedding_max, _ = torch.max(et_embedding, dim=1) # (128,)
+
         # Create the full unit embedding
-        unit_embedding = torch.cat((ah_embedding, eh_embedding, anh_embedding, enh_embedding), dim=1)  # (n, 128)
+        unit_embedding = torch.cat((ah_embedding, eh_embedding, anh_embedding, enh_embedding,
+                                    at_embedding, et_embedding), dim=1)  # (n, 128)
 
         # Combine for LSTM.
-        x = torch.cat((env, ah_embedding_max, eh_embedding_max, anh_embedding_max, enh_embedding_max), dim=1)  # (640,)
+        x = torch.cat((env, ah_embedding_max, eh_embedding_max, anh_embedding_max, enh_embedding_max,
+                       at_embedding_max, et_embedding_max), dim=1)  # (896,)
 
-        x = F.relu(self.affine_pre_rnn(x))  # (640,)
+        x = F.relu(self.affine_pre_rnn(x))  # (896,)
 
         # TODO(tzaman) Maybe add parameter noise here.
         # x = self.ln(x)
@@ -119,7 +133,7 @@ class Policy(nn.Module):
         action_scores_enum = self.affine_head_enum(x)
         # action_delay_enum = self.affine_head_delay(x)
         action_unit_attention = self.affine_unit_attention(x)  # shape: (1, 256)
-
+ 
         unit_embedding = torch.transpose(unit_embedding, dim0=2, dim1=1) # (b, units, n) -> (b, n, units)
 
         action_unit_attention= torch.matmul(action_unit_attention, unit_embedding)   # (b, 1, n) * (b, n, U) = (b, 1, U)
@@ -130,6 +144,7 @@ class Policy(nn.Module):
             y=F.softmax(action_scores_y, dim=2),
             # delay=F.softmax(action_delay_enum, dim=2),
             target_unit=F.softmax(action_unit_attention, dim=2),
+            ability_levelup=ability_leveling,
         )
 
         # TODO(tzaman): what is the correct way to handle invalid actions like below?
@@ -168,6 +183,9 @@ class Policy(nn.Module):
                 action_dict['target_unit'] = cls.sample_action(head_prob_dict['target_unit'])
         else:
             ValueError("Invalid Action Selection.")
+
+        # determine ability to level up
+        action_dict['ab_level'] = head_prob_dict['ability_levelup'][0][0][0].item()
 
         return action_dict
 
