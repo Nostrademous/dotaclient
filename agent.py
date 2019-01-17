@@ -332,7 +332,7 @@ class Player:
     def pack_policy_inputs(inputs):
         """Convert the list-of-dicts into a dict with a single tensor per input for the sequence."""
 
-        d = {'env':[], 'allied_heroes':[], 'enemy_heroes':[], 'allied_nonheroes':[], 'enemy_nonheroes':[]}
+        d = {'env':[], 'ability_leveling':[], 'allied_heroes':[], 'enemy_heroes':[], 'allied_nonheroes':[], 'enemy_nonheroes':[]}
         for inp in inputs:  # go over steps: (list of dicts)
             for k, v in inp.items(): # go over each input in the step (dict)
                 d[k].append(v)
