@@ -97,77 +97,18 @@ def get_total_xp(level, xp_needed_to_level):
     missing_xp_for_next_level = (xp_required_for_next_level - xp_needed_to_level)
     return xp_to_reach_level[level] + missing_xp_for_next_level
 
-'''
-def get_reward(prev_obs, obs, player_id):
-    """Get the reward."""
-    unit_init = get_unit(prev_obs, player_id=player_id)
-    unit = get_unit(obs, player_id=player_id)
-    player_init = get_player(prev_obs, player_id=player_id)
-    player = get_player(obs, player_id=player_id)
-
-    mid_tower_init = get_mid_tower(prev_obs, team_id=player.team_id)
-    mid_tower = get_mid_tower(obs, team_id=player.team_id)
-
-    reward = {'win': 0}
-
-    # XP Reward
-    xp_init = get_total_xp(level=unit_init.level, xp_needed_to_level=unit_init.xp_needed_to_level)
-    xp = get_total_xp(level=unit.level, xp_needed_to_level=unit.xp_needed_to_level)
-    reward['xp'] = (xp - xp_init) * 0.002  # One creep is around 40 xp.
-
-    # HP and death reward
-    if unit_init.is_alive and unit.is_alive:
-        hp_rel_init = unit_init.health / unit_init.health_max
-        hp_rel = unit.health / unit.health_max
-        low_hp_factor = 1. + (1 - hp_rel)**2  # hp_rel=0 -> 2; hp_rel=0.5->1.25; hp_rel=1 -> 1.
-        reward['hp'] = (hp_rel - hp_rel_init) * low_hp_factor
-    else:
-        reward['hp'] = 0
-
-    # Kill and death rewards
-    reward['kills'] = (player.kills - player_init.kills) * 1.0
-    reward['death'] = (player.deaths - player_init.deaths) * -0.5
-
-    # Last-hit reward
-    lh = unit.last_hits - unit_init.last_hits
-    reward['lh'] = lh * 0.5
-
-    # Deny reward
-    denies = unit.denies - unit_init.denies
-    reward['denies'] = denies * 0.2
-
-    # Tower hp reward. Note: towers have 1900 hp.
-    # reward['tower_hp'] = (mid_tower.health - mid_tower_init.health) / 500.
-
-    # Microreward for distance to help nudge to mid initially.
-    dist_mid = math.sqrt(unit.location.x**2 + unit.location.y**2)
-    reward['dist'] = -(dist_mid / 8000.) * 0.001
-
-    return reward
-'''
-
-def get_reward_2(data, player_id):
+def get_reward(data, player_id):
     """Get the reward."""
     player = data.get_player_by_id(player_id)
 
-    reward = {}
-
-    #level_diff  = player.udata.level - player.prev_udata.level
+    reward = { 'win': 0 }
 
     prev_total_xp = get_total_xp(player.prev_udata.get_level(), player.prev_udata.get_xp_needed_to_level())
     curr_total_xp = get_total_xp(player.udata.get_level(), player.udata.get_xp_needed_to_level())
     xp_diff = curr_total_xp - prev_total_xp
     reward['xp'] = (xp_diff) * 0.002 # One creep is around 40xp
 
-    kill_diff   = player.pdata.kills - player.prev_pdata.kills
-    reward['kills'] = kill_diff * 1.0
-
-    death_diff  = player.pdata.deaths - player.prev_pdata.deaths
-    reward['death'] = death_diff * -1.0
-
-    assist_diff = player.pdata.assists - player.prev_pdata.assists
-    reward['assist'] = assist_diff * 0.5
-
+    # get the time delta since last time we had info on this player
     t_delta = player.get_time_since_last_seen()
 
     if player.prev_udata.is_alive() and player.udata.is_alive():
@@ -187,7 +128,7 @@ def get_reward_2(data, player_id):
         low_mana_factor = 1. + (1 - curr_mana_ratio)**2
         reward['mana'] = (curr_mana_ratio - prev_mana_ratio) * low_mana_factor
 
-    # players start with 600 gold, 1 TP (50gold) and gain 1 gold per 0.66 seconds at 0:00 game clock (91 gold / minute)
+    # players gain 1 gold per 0.66 seconds at 0:00 game clock (91 gold / minute)
     gold_diff = 0.
     # calculate gold value for the game after 0:00 timestamp
     if data.game_state == 5:
@@ -196,7 +137,7 @@ def get_reward_2(data, player_id):
     elif data.game_state == 4:
         gold_diff = player.udata.get_net_worth() - player.prev_udata.get_net_worth()
     # TODO (nostrademous) do we care in reliable vs. unreliable gold?
-    reward['gold'] = gold_diff
+    reward['gold'] = (gold_diff) * 0.002 # this gives it similar importance to xp
     
     # Microreward for distance to help nudge to mid initially.
     dist_mid = player.get_location().len()
@@ -268,15 +209,6 @@ def get_unit(state, player_id):
     raise ValueError("unit {} not found in state:\n{}".format(player_id, state))
 
 
-def get_mid_tower(state, team_id):
-    for unit in state.units:
-        if unit.unit_type == CMsgBotWorldState.UnitType.Value('TOWER') \
-            and unit.team_id == team_id \
-            and 'tower1_mid' in unit.name:
-            return unit
-    raise ValueError("tower not found in state:\n{}".format(state))
-
-
 class Player:
 
     END_STATUS_TO_TEAM = {
@@ -324,9 +256,9 @@ class Player:
             return
         if end_state in self.END_STATUS_TO_TEAM.keys():
             if self.team_id == self.END_STATUS_TO_TEAM[end_state]:
-                self.rewards[-1]['win'] = 1
+                self.rewards[-1]['win'] = 1000
             else:
-                self.rewards[-1]['win'] = -1
+                self.rewards[-1]['win'] = -1000
 
     @staticmethod
     def pack_policy_inputs(inputs):
@@ -385,7 +317,7 @@ class Player:
         self.rewards = []
 
     @staticmethod
-    def unit_matrix(state, hero_unit, team_id, unit_types, only_self=False):
+    def unit_matrix(unit_list, hero_unit, only_self=False):
         # We are always inserting an 'zero' unit to make sure the policy doesn't barf
         # We can't just pad this, because we will otherwise lose track of corresponding chosen
         # actions relating to output indices. Even if we would, batching multiple sequences together
@@ -393,87 +325,76 @@ class Player:
         handles = torch.full([Policy.MAX_UNITS], -1)
         m = torch.zeros(Policy.MAX_UNITS, 8)
         i = 0
-        for unit in state.units:
-            if unit.team_id == team_id and unit.is_alive and unit.unit_type in unit_types:
+        for unit in unit_list:
+            if unit.is_alive():
                 if only_self:
-                    if unit != hero_unit:
+                    if unit.handle != hero_unit.handle:
                         continue
                 if i >= Policy.MAX_UNITS:
                     break
-                rel_hp = (unit.health / unit.health_max) - 0.5
-                loc_x = unit.location.x / 7000.
-                loc_y = unit.location.y / 7000.
-                loc_z = (unit.location.z / 512.)-0.5
-                distance_x = (hero_unit.location.x - unit.location.x)
-                distance_y = (hero_unit.location.y - unit.location.y)
-                distance = math.sqrt(distance_x**2 + distance_y**2)
-                facing_sin = math.sin(unit.facing * (2 * math.pi) / 360)
-                facing_cos = math.cos(unit.facing * (2 * math.pi) / 360)
-                targettable = float(distance <= hero_unit.attack_range) - 0.5
+                rel_hp = unit.get_health_ratio() - 0.5
+                rel_mana = unit.get_mana_ratio() - 0.5
+ 
+                norm_loc = unit.get_location() / 7000.
+                norm_loc_z = (norm_loc.z / 512.) - 0.5
+ 
+                distance = hero_unit.get_location().dist(unit.get_location())
+
+                facing_sin = math.sin(unit.get_facing() * (2 * math.pi) / 360)
+                facing_cos = math.cos(unit.get_facing() * (2 * math.pi) / 360)
+
+                targettable = float(distance <= hero_unit.get_attack_range()) - 0.5
                 distance = (distance / 7000.) - 0.5
-                # TODO(tzaman): use distance x,y
-                # distance_x = (distance_x / 3000)-0.5.
-                # distance_y = (distance_y / 3000)-0.5.
                 m[i] = (
                     torch.tensor([
-                        rel_hp, loc_x, loc_y, loc_z, distance, facing_sin, facing_cos, targettable,
+                        rel_hp, norm_loc.x, norm_loc.y, norm_loc_z, distance, facing_sin, facing_cos, targettable,
                     ]))
                 handles[i] = unit.handle
                 i += 1
         return m, handles
 
-    def select_action(self, world_state, hidden):
-        actions = {}
+    def select_action(self, data, hidden):
+        player = data.get_player_by_id(self.player_id)
 
-        # Preprocess the state
-        hero_unit = get_unit(world_state, player_id=self.player_id)
-
-        dota_time_norm = world_state.dota_time / 1200.  # Normalize by 20 minutes
-        creepwave_sin = math.sin(world_state.dota_time * (2. * math.pi) / 60)
+        dota_time_norm = data.dota_time / 1200.  # Normalize by 20 minutes
+        creepwave_sin = math.sin(data.dota_time * (2. * math.pi) / 60)
         team_float = -.2 if self.team_id == TEAM_DIRE else .2
 
         env_state = torch.Tensor([dota_time_norm, creepwave_sin, team_float])
 
+        # Process player ability leveling
+        ids = data.get_player_ability_ids(player_id=self.player_id, bCanBeLeveled=True)
+        #print(player.get_name(),  'abilities that can be leveled', ids)
+        ab_state = torch.zeros(1, Policy.MAX_LEVEL_ABILITY_SELECTIONS)
+        #TODO: FIXME
+
         # Process units
         allied_heroes, allied_hero_handles = self.unit_matrix(
-            state=world_state,
-            hero_unit=hero_unit,
-            unit_types=[CMsgBotWorldState.UnitType.Value('HERO')],
-            team_id=hero_unit.team_id,
+            unit_list=data.get_good_players_units(),
+            hero_unit=player.udata,
             only_self=True,  # For now, ignore teammates.
         )
 
         enemy_heroes, enemy_hero_handles = self.unit_matrix(
-            state=world_state,
-            hero_unit=hero_unit,
-            unit_types=[CMsgBotWorldState.UnitType.Value('HERO')],
-            team_id=OPPOSITE_TEAM[hero_unit.team_id],
+            unit_list=data.get_bad_players_units(),
+            hero_unit=player.udata,
         )
 
         allied_nonheroes, allied_nonhero_handles = self.unit_matrix(
-            state=world_state,
-            hero_unit=hero_unit,
-            unit_types=[
-                CMsgBotWorldState.UnitType.Value('LANE_CREEP'),
-                CMsgBotWorldState.UnitType.Value('CREEP_HERO')
-            ],
-            team_id=hero_unit.team_id,
+            unit_list=data.get_good_nonhero_units(),
+            hero_unit=player.udata,
         )
 
         enemy_nonheroes, enemy_nonhero_handles = self.unit_matrix(
-            state=world_state,
-            hero_unit=hero_unit,
-            unit_types=[
-                CMsgBotWorldState.UnitType.Value('LANE_CREEP'),
-                CMsgBotWorldState.UnitType.Value('CREEP_HERO')
-            ],
-            team_id=OPPOSITE_TEAM[hero_unit.team_id],
+            unit_list=data.get_bad_nonhero_units(),
+            hero_unit=player.udata,
         )
 
         unit_handles = torch.cat([allied_hero_handles, enemy_hero_handles, allied_nonhero_handles, enemy_nonhero_handles])
 
         policy_input = dict(
             env=env_state,
+            ability_leveling=ab_state,
             allied_heroes=allied_heroes,
             enemy_heroes=enemy_heroes,
             allied_nonheroes=allied_nonheroes,
@@ -488,9 +409,9 @@ class Player:
 
         return action_dict, policy_input, unit_handles, hidden
 
-    def action_to_pb(self, action_dict, state, unit_handles):
+    def action_to_pb(self, action_dict, data, unit_handles):
         # TODO(tzaman): Recrease the scope of this function. Make it a converter only.
-        hero_unit = get_unit(state, player_id=self.player_id)
+        player = data.get_player_by_id(self.player_id)
 
         action_pb = CMsgBotWorldState.Action()
         # action_pb.actionDelay = action_dict['delay'] * DELAY_ENUM_TO_STEP
@@ -501,7 +422,7 @@ class Player:
             action_pb.actionType = CMsgBotWorldState.Action.Type.Value(
                 'DOTA_UNIT_ORDER_MOVE_TO_POSITION')
             m = CMsgBotWorldState.Action.MoveToLocation()
-            hero_location = hero_unit.location
+            hero_location = player.get_location()
             m.location.x = hero_location.x + Policy.MOVE_ENUMS[action_dict['x']]
             m.location.y = hero_location.y + Policy.MOVE_ENUMS[action_dict['y']]
             m.location.z = 0
@@ -520,9 +441,9 @@ class Player:
             raise ValueError("unknown action {}".format(action_enum))
         return action_pb
 
-    def obs_to_action(self, obs):
+    def obs_to_action(self, data):
         action_dict, policy_input, unit_handles, self.hidden = self.select_action(
-            world_state=obs,
+            data=data,
             hidden=self.hidden,
         )
 
@@ -531,18 +452,12 @@ class Player:
 
         logger.debug('action:\n' + pformat(action_dict))
 
-        action_pb = self.action_to_pb(action_dict=action_dict, state=obs, unit_handles=unit_handles)
+        action_pb = self.action_to_pb(action_dict=action_dict, data=data, unit_handles=unit_handles)
         action_pb.player = self.player_id
         return action_pb
 
-    '''
-    def compute_reward(self, prev_obs, obs):
-        reward = get_reward(prev_obs=prev_obs, obs=obs, player_id=self.player_id)
-        self.rewards.append(reward)
-    '''
-
-    def compute_reward_2(self, data):
-        reward = get_reward_2(data, player_id=self.player_id)
+    def compute_reward(self, data):
+        reward = get_reward(data, player_id=self.player_id)
         self.rewards.append(reward)
 
 
@@ -590,11 +505,6 @@ class Game:
 
         response = await asyncio.wait_for(self.dota_service.reset(self.config), timeout=120)
 
-        #prev_obs = {
-        #    TEAM_RADIANT: response.world_state_radiant,
-        #    TEAM_DIRE: response.world_state_dire,
-        #}
-
         world_data = {
             TEAM_RADIANT: WorldData(response.world_state_radiant),
             TEAM_DIRE: WorldData(response.world_state_dire),
@@ -619,16 +529,13 @@ class Game:
 
                 world_data[team_id].update_world_data(obs)
 
-                #player.compute_reward(prev_obs=prev_obs[team_id], obs=obs)
-                player.compute_reward_2(world_data[team_id])
+                player.compute_reward(world_data[team_id])
 
-                action_pb = player.obs_to_action(obs=obs)
+                action_pb = player.obs_to_action(data=world_data[team_id])
                 actions_pb = CMsgBotWorldState.Actions(actions=[action_pb])
                 actions_pb.dota_time = obs.dota_time
 
                 _ = await self.dota_service.act(Actions(actions=actions_pb, team_id=team_id))
-
-                #prev_obs[team_id] = obs
 
             # Subtract eachothers rewards
             # if step > 0:

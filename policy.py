@@ -28,11 +28,14 @@ class Policy(nn.Module):
     MOVE_ENUMS *= MAX_MOVE_IN_OBS / (N_MOVE_ENUMS - 1) * 2
     MAX_UNITS = 16
 
+    MAX_LEVEL_ABILITY_SELECTIONS = 15
+
     def __init__(self):
         super().__init__()
 
         self.affine_env = nn.Linear(3, 128)
 
+        self.affine_player_ability_selection = nn.Linear(self.MAX_LEVEL_ABILITY_SELECTIONS, 128)
         self.affine_unit_basic_stats = nn.Linear(8, 128)
 
         self.affine_unit_ah = nn.Linear(128, 128)
@@ -58,9 +61,11 @@ class Policy(nn.Module):
             kwargs[k] = kwargs[k].unsqueeze(0)
         return self.__call__(**kwargs, hidden=hidden)
 
-    def forward(self, env, allied_heroes, enemy_heroes, allied_nonheroes, enemy_nonheroes, hidden):
+    def forward(self, env, ability_leveling, allied_heroes, enemy_heroes,
+                allied_nonheroes, enemy_nonheroes, hidden):
         logger.debug('policy(inputs=\n{}'.format(
             pformat({'env': env,
+            'ability_leveling': ability_leveling,
             'allied_heroes': allied_heroes,
             'enemy_heroes': enemy_heroes,
             'allied_nonheroes': allied_nonheroes,
@@ -69,6 +74,9 @@ class Policy(nn.Module):
 
         # Environment.
         env = F.relu(self.affine_env(env))  # (128,)
+
+        # Ability Leveling
+        ab_lvl_basic = F.relu(self.affine_player_ability_selection(ability_leveling)) # (128,)
 
         # Allied Heroes.
         ah_basic = F.relu(self.affine_unit_basic_stats(allied_heroes))

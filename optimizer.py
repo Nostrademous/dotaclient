@@ -317,7 +317,10 @@ class DotaOptimizer:
         return int(x.group(0))
 
     def get_latest_model(self, prefix):
-        blobs = list(self.bucket.list_blobs(prefix=prefix))
+        if not self.local:
+            blobs = list(self.bucket.list_blobs(prefix=prefix))
+        else:
+            blobs = [f for f in os.listdir(prefix) if os.path.isfile(f)]
         if not blobs:
             # Directory does not exist, or no files in directory.
             return None
