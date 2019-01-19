@@ -215,6 +215,12 @@ class UnitData(object):
     def get_curr_move_speed(self):
         return self.data.current_movement_speed
 
+    def get_attack_target_handle(self):
+        return self.data.attack_target_handle
+
+    def get_ability_target_handle(self):
+        return self.data.ability_target_handle
+
     def is_stunned(self):
         return self.data.is_stunned
 
