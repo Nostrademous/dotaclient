@@ -256,9 +256,9 @@ class Player:
             return
         if end_state in self.END_STATUS_TO_TEAM.keys():
             if self.team_id == self.END_STATUS_TO_TEAM[end_state]:
-                self.rewards[-1]['win'] = 1000
+                self.rewards[-1]['win'] = 1
             else:
-                self.rewards[-1]['win'] = -1000
+                self.rewards[-1]['win'] = -1
 
     @staticmethod
     def pack_policy_inputs(inputs):
