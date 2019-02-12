@@ -47,7 +47,7 @@ OPPOSITE_TEAM = {TEAM_DIRE: TEAM_RADIANT, TEAM_RADIANT: TEAM_DIRE}
 
 TICKS_PER_OBSERVATION = 15
 N_DELAY_ENUMS = 5
-HOST_TIMESCALE = 2
+HOST_TIMESCALE = 10
 N_GAMES = 10000000
 MAX_AGE_WEIGHTSTORE = 32
 MAP_HALF_WIDTH = 7000.  # Approximate size of the half of the map.
@@ -714,8 +714,6 @@ class Draft:
 
     def is_done(self):
         done = len(self.radiant_selections.keys()) == 5 and len(self.dire_selections.keys()) == 5
-        if done:
-            logger.info('DRAFTING COMPLETED!')
         return done
 
 class Game:
@@ -775,9 +773,14 @@ class Game:
             while not processed:
                 response = await self.dota_service.select_hero(hs_pb)
                 logger.debug('HERO SELECTION -- RESPONSE\n{}'.format(pformat(response)))
-                if response.status == 0:
+                if response.status in [0,14]:
                     self.draft.add_selection(hs_pb.team_id, int(hs_pb.player_index), hs_pb.hero_name)
                     processed = True
+
+                    if self.draft.is_done():
+                        while response.status != 0:
+                            response = await self.dota_service.select_hero(hs_pb)
+                        logger.info('Drafting Complete and World State Acquired!')
 
         prev_obs = {
             TEAM_RADIANT: response.world_state_radiant,
@@ -789,7 +792,7 @@ class Game:
         dota_time = -float('Inf')
         end_state = None
         while dota_time < self.max_dota_time:
-            for team_id, player in players.items():  # TODO(tzaman): actually, should loop over teams first instead of players.
+            for team_id, player in players.items(): # TODO(tzaman): actually, should loop over teams first instead of players.
                 logger.debug('\ndota_time={:.2f}, team={}'.format(dota_time, team_id))
                 player = players[team_id]
 
