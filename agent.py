@@ -24,6 +24,9 @@ from dotaservice.protos.DotaService_pb2 import HostMode
 from dotaservice.protos.DotaService_pb2 import ObserveConfig
 from dotaservice.protos.DotaService_pb2 import Status
 from dotaservice.protos.DotaService_pb2 import TEAM_DIRE, TEAM_RADIANT
+from dotaservice.protos.dota_shared_enums_pb2 import DOTA_GAMERULES_STATE_HERO_SELECTION
+from dotaservice.protos.DotaService_pb2 import HeroSelection
+from dotaservice.protos.DotaService_pb2 import SELECTION_TYPE_PICK
 from grpclib.client import Channel
 import aioamqp
 import grpc
@@ -44,11 +47,12 @@ OPPOSITE_TEAM = {TEAM_DIRE: TEAM_RADIANT, TEAM_RADIANT: TEAM_DIRE}
 
 TICKS_PER_OBSERVATION = 15
 N_DELAY_ENUMS = 5
-HOST_TIMESCALE = 10
+HOST_TIMESCALE = 2
 N_GAMES = 10000000
 MAX_AGE_WEIGHTSTORE = 32
 MAP_HALF_WIDTH = 7000.  # Approximate size of the half of the map.
 
+GAME_MODE = DOTA_GAMEMODE_1V1MID
 HOST_MODE = HostMode.Value('HOST_MODE_DEDICATED')
 
 DOTASERVICE_HOST = '127.0.0.1'
@@ -665,6 +669,55 @@ class Drawing:
         png.from_array(self.canvas, 'RGB').save('{}.png'.format(stem))
 
 
+class Draft:
+    RADIANT_RANGE = [0,1,2,3,4]
+    DIRE_RANGE    = [5,6,7,8,9]
+
+    def __init__(self, start_team=TEAM_RADIANT):
+        self.radiant_selections = {}
+        self.dire_selections = {}
+        self.bans = []
+        self.current_team = start_team
+
+    def _find_missing_index(self, team_id):
+        if team_id == TEAM_RADIANT:
+            ret = [i for i in self.RADIANT_RANGE if i not in self.radiant_selections.keys()]
+        elif team_id == TEAM_DIRE:
+            ret = [i for i in self.DIRE_RANGE if i not in self.dire_selections.keys()]
+        return random.choice(ret)
+
+    def make_selection(self):
+        team_id = self.current_team
+        hero_name = 'npc_dota_hero_antimage'
+        index = self._find_missing_index(team_id)
+        if team_id == TEAM_RADIANT:
+            if index == 0:
+                hero_name = 'npc_dota_hero_nevermore'
+            else:
+                hero_name = 'npc_dota_hero_sniper'
+            self.current_team = TEAM_DIRE
+        elif team_id == TEAM_DIRE:
+            if index == 5:
+                hero_name = 'npc_dota_hero_nevermore'
+            else:
+                hero_name = 'npc_dota_hero_sniper'
+            self.current_team = TEAM_RADIANT
+
+        selection_type = SELECTION_TYPE_PICK
+        return HeroSelection(type=selection_type, team_id=team_id, player_index=index, hero_name=hero_name)
+
+    def add_selection(self, team, index, strHero):
+        if team == TEAM_RADIANT:
+            self.radiant_selections[index] = strHero
+        elif team == TEAM_DIRE:
+            self.dire_selections[index] = strHero
+
+    def is_done(self):
+        done = len(self.radiant_selections.keys()) == 5 and len(self.dire_selections.keys()) == 5
+        if done:
+            logger.info('DRAFTING COMPLETED!')
+        return done
+
 class Game:
 
     ENV_RETRY_DELAY = 15
@@ -677,6 +730,7 @@ class Game:
         self.rollout_size = rollout_size
         self.max_dota_time = max_dota_time
         self.latest_weights_prob = latest_weights_prob
+        self.draft = None
 
     async def play(self, game_id):
         logger.info('Starting game.')
@@ -708,13 +762,28 @@ class Game:
                 drawing=drawing,
                 ),
         }
-        
-        response = await asyncio.wait_for(self.dota_service.reset(self.config), timeout=120)
+
+        _ = await self.dota_service.reset(self.config)
+
+
+        reponse = None
+        self.draft = Draft()
+        while not self.draft.is_done():
+            hs_pb = self.draft.make_selection()
+            logger.debug('HERO SELECTION -- TRANSMITTED\n{}'.format(pformat(hs_pb)))
+            processed = False
+            while not processed:
+                response = await self.dota_service.select_hero(hs_pb)
+                logger.debug('HERO SELECTION -- RESPONSE\n{}'.format(pformat(response)))
+                if response.status == 0:
+                    self.draft.add_selection(hs_pb.team_id, int(hs_pb.player_index), hs_pb.hero_name)
+                    processed = True
 
         prev_obs = {
             TEAM_RADIANT: response.world_state_radiant,
             TEAM_DIRE: response.world_state_dire,
         }
+
         done = False
         step = 0
         dota_time = -float('Inf')
@@ -801,7 +870,7 @@ async def main(rmq_host, rmq_port, rollout_size, max_dota_time, latest_weights_p
         ticks_per_observation=TICKS_PER_OBSERVATION,
         host_timescale=HOST_TIMESCALE,
         host_mode=HOST_MODE,
-        game_mode=DOTA_GAMEMODE_1V1MID,
+        game_mode=GAME_MODE,
     )
 
     game = Game(config=config, dota_service=dota_service, experience_channel=experience_channel,
