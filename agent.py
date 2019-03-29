@@ -267,11 +267,50 @@ def is_unit_attacking_unit(unit_attacker, unit_target):
     # Otherwise, the unit is not attacking the target, and there are no incoming projectiles.
     return 0.
 
-def is_invulnerable(unit):
-    for mod in unit.modifiers:
-        if mod.name == "modifier_invulnerable":
+def has_modifier(hUnit, mod_list):
+    for mod in in hUnit.modifiers:
+        if mod.name in mod_list:
             return True
     return False
+
+def is_invulnerable(hUnit):
+    return has_modifier(hUnit, ['modifier_invulnerable'])
+
+def is_made_visibile(hUnit):
+    made_visibile = has_modifier(hUnit, ['modifier_item_dustofappearance', 'modifier_bounty_hunter_track', 'modifier_slardar_amplify_damage'])
+    # NOTE - this does not account for possible Sentry wards in area or Truesight Gem on nearby unit
+    return made_visibile
+
+def has_dot(hUnit): # check for Damage over Time (DoT) on unit
+    # TODO (nostrademous) - check this list for completeness
+    dot_list = [
+        "modifier_abyssal_underlord_firestorm_burn",
+        "modifier_axe_battle_hunger",
+        "modifier_brewmaster_fire_permanent_immolation",
+        "modifier_dazzle_poison_touch",
+        "modifier_disruptor_thunder_strike",
+        "modifier_doom_bringer_scorched_earth_effect",
+        "modifier_doom_bringer_infernal_blade_burn",
+        "modifier_doom_bringer_doom",
+        "modifier_dragon_knight_corrosive_breath_dot",
+        "modifier_earth_spirit_magnetize",
+        "modifier_ember_spirit_searing_chains",
+        "modifier_huskar_burning_spear_debuff",
+        "modifier_ice_blast",
+        "modifier_item_urn_damage",
+        "modifier_jakiro_dual_breath_burn",
+        "modifier_jakiro_liquid_fire_burn",
+        "modifier_ogre_magi_ignite",
+        "modifier_phoenix_fire_spirit_burn",
+        "modifier_silencer_curse_of_the_silent",
+        "modifier_venomancer_poison_sting",
+        "modifier_viper_corrosive_skin",
+        "modifier_viper_poison_attack",
+        "modifier_viper_viper_strike_slow",
+        "modifier_warlock_shadow_word",
+        "modifier_maledict"
+    ]
+    return has_modifier(hUnit, dot_list)
 
 class Player:
 
@@ -531,7 +570,7 @@ class Player:
                 norm_distance = (distance / MAP_HALF_WIDTH) - 0.5
 
                 # Get the direction where the unit is facing.
-                facing_sin = math.sin(unit.facing * (2 * math.pi) / 360)	
+                facing_sin = math.sin(unit.facing * (2 * math.pi) / 360)    
                 facing_cos = math.cos(unit.facing * (2 * math.pi) / 360)
 
                 # Calculates normalized boolean value [-0.5 or 0.5] of if unit is within 
