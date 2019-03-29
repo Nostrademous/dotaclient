@@ -268,7 +268,7 @@ def is_unit_attacking_unit(unit_attacker, unit_target):
     return 0.
 
 def has_modifier(hUnit, mod_list):
-    for mod in in hUnit.modifiers:
+    for mod in hUnit.modifiers:
         if mod.name in mod_list:
             return True
     return False
