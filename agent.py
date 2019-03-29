@@ -277,7 +277,13 @@ def is_invulnerable(hUnit):
     return has_modifier(hUnit, ['modifier_invulnerable'])
 
 def is_made_visibile(hUnit):
-    made_visibile = has_modifier(hUnit, ['modifier_item_dustofappearance', 'modifier_bounty_hunter_track', 'modifier_slardar_amplify_damage'])
+    vision_list = [
+        "modifier_item_dustofappearance",
+        "modifier_bounty_hunter_track",
+        "modifier_slardar_amplify_damage",
+        "modifier_bloodseeker_thirst_vision"
+    ]
+    made_visibile = has_modifier(hUnit, vision_list)
     # NOTE - this does not account for possible Sentry wards in area or Truesight Gem on nearby unit
     return made_visibile
 
